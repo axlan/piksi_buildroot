@@ -8,15 +8,46 @@
 #include <string.h> /* memset() */
 #include <sys/time.h> /* select() */ 
 #include <stdlib.h>
+#include <stdbool.h>
+
 
 #define REMOTE_SERVER_PORT 1500
 #define BROADCAST_INTERVAL 5
 
-const char BROADCAST_PACKET[] = {'S', 'N', 0};
+char BROADCAST_PACKET[] = {'S', 'N', 0xff, 0xff, 0};
 
 const char * BROADCAST_ADDR = "255.255.255.255";
 
-int main(int argc, char *argv[]) {
+static int file_read_string(const char *filename, char *str, size_t str_size)
+{
+  FILE *fp = fopen(filename, "r");
+  if (fp == NULL) {
+    fprintf(stderr, "error opening %s\n", filename);
+    return -1;
+  }
+
+  bool success = (fgets(str, str_size, fp) != NULL);
+
+  fclose(fp);
+
+  if (!success) {
+    fprintf(stderr, "error reading %s\n", filename);
+    return -1;
+  }
+
+  return 0;
+}
+
+int main(int argc, char *argv[])
+{
+  uint16_t sbp_sender_id = 0xFFFF;
+  char sbp_sender_id_string[32];
+  if (file_read_string("/cfg/sbp_sender_id", sbp_sender_id_string,
+                        sizeof(sbp_sender_id_string)) == 0) {
+    sbp_sender_id = strtoul(sbp_sender_id_string, NULL, 10);
+  }
+
+  memcpy(BROADCAST_PACKET + 2, &sbp_sender_id, 2);
   
   int sd, rc, i;
   struct sockaddr_in cliAddr, remoteServAddr;
