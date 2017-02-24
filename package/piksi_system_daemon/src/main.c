@@ -194,6 +194,33 @@ static char eth_ip_addr[16] = "192.168.0.222";
 static char eth_netmask[16] = "255.255.255.0";
 static char eth_gateway[16] = "192.168.0.1";
 
+static char wifi_ssid[64] = "";
+static char wifi_password[64] = "";
+
+static void wifi_update_config(void)
+{
+  int ssid_len = strnlen(wifi_ssid, sizeof(wifi_ssid));
+  int pass_len = strnlen(wifi_password, sizeof(wifi_password));
+
+  if (ssid_len == 0 || ssid_len == sizeof(wifi_ssid) ||
+      pass_len == 0 || pass_len == sizeof(wifi_password)) {
+    return;
+  }
+  char command[200];
+  //TODO: probably hackable, should be sanitized 
+  sprintf(command, "/etc/wifi_config.sh '%s' '%s'", wifi_ssid, wifi_password);
+  system(command);
+}
+
+static bool wifi_config_notify(struct setting *s, const char *val)
+{
+  bool ret = settings_default_notify(s, val);
+  if (ret) {
+    wifi_update_config();
+  }
+  return ret;
+}
+
 static void eth_update_config(void)
 {
   system("ifdown eth0");
@@ -252,12 +279,21 @@ static int raw_fgets(char *str, size_t len, FILE *stream)
     int r = read(fd, &str[i], 1);
     if (r < 0)
       return r;
-    if ((r == 0) || (str[i] == '\n'))
+    if (r == 0)
       break;
+    if (str[i] == '\n') {
+      if (i == 0) {
+        str[i] = ' ';
+        continue;
+      }
+      break;
+    }
   }
   str[i++] = 0;
   return i > 1 ? i : 0;
 }
+
+static const char * cmd_str;
 
 static int command_output(zloop_t *loop, zmq_pollitem_t *item, void *arg)
 {
@@ -265,8 +301,10 @@ static int command_output(zloop_t *loop, zmq_pollitem_t *item, void *arg)
   msg_log_t *msg = alloca(256);
   msg->level = 6;
 
-  if (raw_fgets(msg->text,
-                SBP_FRAMING_MAX_PAYLOAD_SIZE - offsetof(msg_log_t, text),
+  int n=sprintf (msg->text, "%s: ", cmd_str);
+
+  if (raw_fgets(&(msg->text[n]),
+                SBP_FRAMING_MAX_PAYLOAD_SIZE - n - offsetof(msg_log_t, text),
                 ctx->pipe) > 0) {
     sbp_zmq_message_send(&sbp_zmq_state, SBP_MSG_LOG,
                          sizeof(*msg) + strlen(msg->text), (void*)msg);
@@ -294,6 +332,7 @@ static void sbp_command(u16 sender_id, u8 len, u8 msg_[], void* context)
    * canned command.
    */
   if (strcmp(msg->command, "upgrade_tool upgrade.image_set.bin") == 0) {
+    cmd_str = "UG";
     struct shell_cmd_ctx *ctx = calloc(1, sizeof(*ctx));
     ctx->pipe = popen(msg->command, "r");
     ctx->sequence = msg->sequence;
@@ -304,6 +343,7 @@ static void sbp_command(u16 sender_id, u8 len, u8 msg_[], void* context)
     fcntl(fileno(ctx->pipe), F_SETFL, &arg);
     zloop_poller(ctx->loop, &ctx->pollitem, command_output, ctx);
   } else if(strcmp(msg->command, "ifconfig") == 0) {
+    cmd_str = "IF";
     struct shell_cmd_ctx *ctx = calloc(1, sizeof(*ctx));
     ctx->pipe = popen(msg->command, "r");
     ctx->sequence = msg->sequence;
@@ -478,6 +518,9 @@ int main(void)
   SETTING_NOTIFY("ethernet", "ip_address", eth_ip_addr, TYPE_STRING, eth_ip_config_notify);
   SETTING_NOTIFY("ethernet", "netmask", eth_netmask, TYPE_STRING, eth_ip_config_notify);
   SETTING_NOTIFY("ethernet", "gateway", eth_gateway, TYPE_STRING, eth_ip_config_notify);
+
+  SETTING_NOTIFY("wifi", "ssid", wifi_ssid, TYPE_STRING, wifi_config_notify);
+  SETTING_NOTIFY("wifi", "password", wifi_password, TYPE_STRING, wifi_config_notify);
 
   sbp_zmq_callback_register(&sbp_zmq_state, SBP_MSG_RESET,
                             reset_callback, NULL, NULL);
